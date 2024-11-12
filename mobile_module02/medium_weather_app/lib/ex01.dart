@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'dart:math' as math;
 import 'package:geolocator/geolocator.dart';
 import 'package:http/http.dart' as http;
+import 'package:geocoding/geocoding.dart';
 
 void main() {
   runApp(WeatherApp());
@@ -29,8 +30,8 @@ class _WeatherHomePageState extends State<WeatherHomePage>
   late TabController _tabController;
   final TextEditingController _controller = TextEditingController();
 
-  String locationMessage = '';
-  String errorMessage = '';
+  String _locationMessage = '';
+  String _errorMessage = '';
   List<dynamic> _suggestions = [];
 
   @override
@@ -48,23 +49,37 @@ class _WeatherHomePageState extends State<WeatherHomePage>
     super.dispose();
   }
 
-  void _onSubmit(String text) {
-    _fetchWeatherByCity(text);
-  }
-
   Future<void> _onGeoLocation() async {
     try {
       Position position = await _getGeoPosition();
+      String cityName =
+          await _getCityName(position.latitude, position.longitude);
+
       setState(() {
-        locationMessage = '${position.latitude} ${position.longitude}';
-        errorMessage = '';
+        _locationMessage = cityName;
+        _errorMessage = '';
       });
     } catch (e) {
       setState(() {
-        locationMessage = '';
-        errorMessage = e.toString();
+        _locationMessage = '';
+        _errorMessage = e.toString();
       });
     }
+  }
+
+  Future<String> _getCityName(double latitude, double longitude) async {
+    List<Placemark> placemarks =
+        await placemarkFromCoordinates(latitude, longitude);
+
+    if (placemarks.isEmpty) {
+      return Future.error("Error while fetching city name");
+    }
+    Placemark place = placemarks[0];
+    String cityName = place.locality ?? '';
+    if (cityName.isEmpty) {
+      return Future.error("Error while getting city name");
+    }
+    return cityName;
   }
 
   Future<Position> _getGeoPosition() async {
@@ -92,13 +107,19 @@ class _WeatherHomePageState extends State<WeatherHomePage>
     return await Geolocator.getCurrentPosition();
   }
 
-  // Fetch suggestions from Open Meteo API
   Future<void> _fetchSuggestions(String query) async {
     if (query.isEmpty) {
       setState(() {
         _suggestions = [];
       });
       return;
+    }
+    if (_suggestions.isNotEmpty) {
+      final firstSuggestion = _suggestions[0];
+      if (query ==
+          '${firstSuggestion['name']}, ${firstSuggestion['country']}') {
+        return;
+      }
     }
 
     final response = await http.get(Uri.parse(
@@ -112,14 +133,39 @@ class _WeatherHomePageState extends State<WeatherHomePage>
     } else {
       setState(() {
         _suggestions = [];
+        _errorMessage =
+            "The service connection is lost, please check your internet connection or try again later";
       });
     }
   }
 
-  // Fetch weather for selected city
-  Future<void> _fetchWeatherByCity(String city) async {
+  Future<dynamic> _fetchWeatherByPosition(
+      double latitude, double longitude) async {
+    print("fetchWeather");
+    // TODO: Fetch weather data from Open Meteo API
+    return "done";
+  }
+
+  void _onSubmit(dynamic place) async {
+    if (_controller.text.isNotEmpty && _suggestions.isEmpty) {
+      return setState(() {
+        _locationMessage = '';
+        _errorMessage =
+            'Could not find any result for the supplied address or coordinates.';
+      });
+    }
+    if (place == null) {
+      return _onGeoLocation();
+    }
+    _controller.text = '${place['name']}, ${place['country']}';
+    final response =
+        await _fetchWeatherByPosition(place['latitude'], place['longitude']);
+
+    // TODO: Show result on screen
     setState(() {
-      locationMessage = 'Weather data for $city';
+      _locationMessage = place['name'];
+      _errorMessage = '';
+      _suggestions = [];
     });
   }
 
@@ -141,8 +187,8 @@ class _WeatherHomePageState extends State<WeatherHomePage>
                       EdgeInsets.symmetric(vertical: 16, horizontal: 10),
                 ),
                 onChanged: _fetchSuggestions,
-                onSubmitted: (text) {
-                  _onSubmit(text);
+                onSubmitted: (String text) {
+                  _onSubmit(_suggestions.isEmpty ? null : _suggestions[0]);
                 },
                 style:
                     TextStyle(color: Theme.of(context).colorScheme.onPrimary),
@@ -160,7 +206,7 @@ class _WeatherHomePageState extends State<WeatherHomePage>
                 icon: Icon(Icons.navigation),
                 color: Theme.of(context).colorScheme.onPrimary,
                 onPressed: () {
-                  _onGeoLocation();
+                  _onSubmit(_suggestions.isEmpty ? null : _suggestions[0]);
                 },
               ),
             ),
@@ -177,20 +223,20 @@ class _WeatherHomePageState extends State<WeatherHomePage>
                       child: Column(
                         mainAxisAlignment: MainAxisAlignment.center,
                         children: [
-                          if (errorMessage.isEmpty)
+                          if (_errorMessage.isEmpty)
                             Text(e,
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                     fontSize: 32, fontWeight: FontWeight.bold)),
-                          if (errorMessage.isEmpty)
-                            Text(locationMessage,
+                          if (_errorMessage.isEmpty)
+                            Text(_locationMessage,
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   fontSize: 24,
                                   fontWeight: FontWeight.bold,
                                 )),
-                          if (errorMessage.isNotEmpty)
-                            Text(errorMessage,
+                          if (_errorMessage.isNotEmpty)
+                            Text(_errorMessage,
                                 textAlign: TextAlign.center,
                                 style: TextStyle(
                                   color: Colors.red,
@@ -237,7 +283,7 @@ class _WeatherHomePageState extends State<WeatherHomePage>
                             ),
                             TextSpan(
                               text:
-                                  ' ${suggestion['admin1'] ?? suggestion['admin2']}, ${suggestion['country']}',
+                                  ' ${suggestion['admin1'] ?? suggestion['admin2'] ?? ''}, ${suggestion['country']}',
                               style: TextStyle(
                                   color: Colors
                                       .black87), // Default style for rest of text
@@ -246,12 +292,7 @@ class _WeatherHomePageState extends State<WeatherHomePage>
                         ),
                       ),
                       onTap: () {
-                        _controller.text =
-                            '${suggestion['name']}, ${suggestion['country']}';
-                        _fetchWeatherByCity(_controller.text);
-                        setState(() {
-                          _suggestions = [];
-                        });
+                        _onSubmit(suggestion);
                       },
                     );
                   },
